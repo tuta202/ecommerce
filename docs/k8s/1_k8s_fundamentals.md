@@ -1100,6 +1100,102 @@ kubectl get pods -n ecommerce
 kubectl config set-context --current --namespace=ecommerce
 ```
 
+## Xóa Resource Thì Chuyện Gì Xảy Ra?
+
+Khi học Kubernetes, cần phân biệt rõ xóa `Namespace`, xóa `Deployment` và xóa `Service`, vì tác động của chúng rất khác nhau.
+
+| Bạn xóa gì? | Lệnh | Kết quả chính |
+| --- | --- | --- |
+| Namespace | `kubectl delete namespace <name>` | Xóa namespace và toàn bộ tài nguyên bên trong namespace đó. |
+| Deployment | `kubectl delete deployment <name>` | Xóa Deployment và các Pod do Deployment đó quản lý. |
+| Service | `kubectl delete service <name>` | Chỉ xóa Service. Pod phía sau vẫn tiếp tục chạy. |
+
+### Xóa Namespace
+
+```bash
+kubectl delete namespace ecommerce
+```
+
+Lệnh này xóa cả namespace `ecommerce` và gần như toàn bộ resource nằm trong namespace đó, ví dụ:
+
+- Pod
+- Deployment
+- ReplicaSet
+- Service
+- ConfigMap
+- Secret
+
+Mental model:
+
+```text
+Namespace = một khu vực logic
+Xóa namespace = xóa cả khu vực đó và mọi thứ bên trong
+```
+
+Vì vậy, đây là lệnh có tác động lớn. Trước khi xóa namespace, nên kiểm tra các resource chính bên trong namespace đó:
+
+```bash
+kubectl get all -n ecommerce
+kubectl get configmaps -n ecommerce
+kubectl get secrets -n ecommerce
+```
+
+> Ghi chú: `kubectl get all` không có nghĩa là liệt kê tuyệt đối mọi loại resource trong namespace. Nó chỉ hiển thị một nhóm resource phổ biến như Pod, Service, Deployment, ReplicaSet, v.v.
+
+### Xóa Deployment
+
+```bash
+kubectl delete deployment order-service
+```
+
+Deployment là resource quản lý ReplicaSet và Pod. Khi xóa Deployment, các Pod do Deployment đó tạo ra cũng bị xóa theo.
+
+Mental model:
+
+```text
+Deployment = bộ quản lý Pod
+Xóa Deployment = xóa bộ quản lý và các Pod mà nó đang quản lý
+```
+
+Sau khi xóa Deployment, Service có thể vẫn còn nếu bạn chưa xóa Service. Nhưng Service đó sẽ không còn Pod backend phù hợp để route traffic nếu không có workload khác có label khớp với selector của Service.
+
+### Xóa Service
+
+```bash
+kubectl delete service order-service
+```
+
+Service chỉ là lớp truy cập ổn định đứng trước Pod. Khi xóa Service, Pod không bị xóa.
+
+Mental model:
+
+```text
+Service = cổng truy cập ổn định vào Pod
+Xóa Service = mất cổng truy cập ổn định, nhưng Pod vẫn chạy
+```
+
+Sau khi xóa Service:
+
+- Pod vẫn còn nếu Deployment vẫn còn.
+- Deployment vẫn tiếp tục duy trì số replica mong muốn.
+- Client không còn gọi được qua DNS Service như `http://order-service`.
+- Về kỹ thuật vẫn có thể gọi trực tiếp Pod IP, nhưng không nên dựa vào cách này vì Pod IP không ổn định.
+
+Nếu resource nằm trong namespace cụ thể, thêm `-n <namespace>` để xóa đúng nơi:
+
+```bash
+kubectl delete deployment order-service -n ecommerce
+kubectl delete service order-service -n ecommerce
+```
+
+Tóm tắt ngắn gọn:
+
+```text
+Namespace  = xóa cả khu vực và mọi tài nguyên bên trong
+Deployment = xóa bộ quản lý và Pod mà nó quản lý
+Service    = xóa cổng truy cập ổn định, Pod vẫn chạy
+```
+
 ## Những lỗi hay gặp
 
 ### Service không route được vào Pod
