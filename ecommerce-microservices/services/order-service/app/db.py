@@ -1,10 +1,16 @@
-import os, asyncpg
+import os
+
+import asyncpg
+
 pool: asyncpg.Pool | None = None
+
+
 async def init_db():
     global pool
     pool = await asyncpg.create_pool(os.environ["DATABASE_URL"])
     async with pool.acquire() as c:
-        await c.execute('''
+        await c.execute(
+            """
         CREATE TABLE IF NOT EXISTS orders(
           id TEXT PRIMARY KEY, customer_id TEXT NOT NULL, amount BIGINT NOT NULL,
           items JSONB NOT NULL, status TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT now()
@@ -16,4 +22,5 @@ async def init_db():
         CREATE TABLE IF NOT EXISTS inbox_events(
           event_id TEXT PRIMARY KEY, processed_at TIMESTAMPTZ DEFAULT now()
         );
-        ''')
+        """
+        )

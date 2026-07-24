@@ -4,6 +4,7 @@ metadata:
   name: order-service
   labels:
     app: order-service
+    component: backend
 spec:
   replicas: 3
   selector:
@@ -13,6 +14,7 @@ spec:
     metadata:
       labels:
         app: order-service
+        component: backend
     spec:
       containers:
         - name: order-service

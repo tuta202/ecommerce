@@ -1,7 +1,15 @@
-import json, os, uuid
+import json
+import os
+import uuid
 from datetime import datetime, timezone
 
-def envelope(event_type: str, aggregate_id: str, payload: dict, correlation_id: str | None = None) -> dict:
+
+def envelope(
+    event_type: str,
+    aggregate_id: str,
+    payload: dict,
+    correlation_id: str | None = None,
+) -> dict:
     return {
         "event_id": str(uuid.uuid4()),
         "event_type": event_type,
@@ -12,6 +20,7 @@ def envelope(event_type: str, aggregate_id: str, payload: dict, correlation_id: 
         "producer": os.getenv("SERVICE_NAME", "unknown"),
         "payload": payload,
     }
+
 
 def dumps(data: dict) -> bytes:
     return json.dumps(data, separators=(",", ":")).encode()

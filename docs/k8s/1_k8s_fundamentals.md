@@ -97,6 +97,48 @@ Một Kubernetes cluster gồm hai nhóm chính:
 - **Control Plane**: bộ não điều khiển cluster
 - **Worker Node**: nơi workload thật sự chạy
 
+### Node là gì?
+
+**Node** là một máy chủ trong Kubernetes cluster, nơi Pod thực sự được chạy.
+
+Node có thể là:
+
+- máy chủ vật lý, còn gọi là bare metal
+- instance trên cloud, ví dụ EC2 của AWS hoặc VM của GCP/Azure
+- máy ảo trong môi trường on-premise hoặc private cloud
+
+Kubernetes không quá quan tâm Node là máy vật lý, máy ảo hay cloud instance. Điều quan trọng là Node đó có đủ các thành phần cần thiết để nhận việc từ Kubernetes và chạy container.
+
+Mental model dễ nhớ:
+
+```text
+Cluster = một khu đô thị
+Node    = từng tòa nhà trong khu đô thị
+Pod     = từng căn hộ trong tòa nhà
+```
+
+Một cluster có thể có nhiều Node. Mỗi Node có tài nguyên riêng như CPU, RAM, disk và network. Kubernetes sẽ phân phối Pod lên các Node dựa trên tài nguyên còn trống, ràng buộc cấu hình và trạng thái hiện tại của cluster.
+
+### Một Node chứa gì?
+
+Một Worker Node thường có các thành phần chính:
+
+| Thành phần | Vai trò |
+| --- | --- |
+| kubelet | Agent chạy trên Node. Nó nhận nhiệm vụ từ API Server và đảm bảo Pod/container trên Node chạy đúng như manifest. |
+| kube-proxy | Hỗ trợ networking cho Service, giúp traffic đi tới đúng Pod phía sau Service. |
+| Container runtime | Thành phần thật sự chạy container, ví dụ `containerd` hoặc CRI-O. |
+| Pods | Workload thật sự của ứng dụng, ví dụ Pod của `order-service`, `payment-service`, `inventory-service`. |
+
+Nói ngắn gọn:
+
+```text
+Node không chỉ chứa Pod.
+Node còn có kubelet, kube-proxy và container runtime để Kubernetes có thể điều khiển workload trên Node đó.
+```
+
+> Ghi chú: Bạn có thể nghe nói Docker chạy container. Trong Kubernetes hiện đại, runtime phổ biến thường là `containerd` hoặc CRI-O. Docker vẫn hữu ích khi build image và học local, nhưng kubelet nói chuyện với container runtime thông qua chuẩn CRI.
+
 Các thành phần quan trọng:
 
 | Thành phần | Vai trò |
@@ -130,6 +172,46 @@ kubectl gửi manifest
   -> controller tiếp tục quan sát và sửa lệch trạng thái
 ```
 
+### Cách Pod được phân phối trên Node
+
+Khi bạn tạo Pod trực tiếp hoặc tạo Deployment sinh ra Pod, Kubernetes cần quyết định Pod đó sẽ chạy trên Node nào. Việc này do **Scheduler** đảm nhiệm.
+
+Flow đơn giản:
+
+```text
+Bạn tạo Deployment/Pod
+  -> API Server lưu desired state
+  -> Scheduler tìm Pod chưa có Node
+  -> Scheduler chọn Node phù hợp
+  -> kubelet trên Node đó nhận nhiệm vụ
+  -> container runtime trên Node chạy container trong Pod
+```
+
+Scheduler chọn Node dựa trên nhiều yếu tố, ví dụ:
+
+- Node còn đủ CPU và RAM cho Pod hay không
+- Pod có yêu cầu `nodeSelector`, affinity hoặc taint/toleration không
+- Node có đang Ready không
+- cluster có cần phân tán Pod ra nhiều Node để tránh dồn hết workload vào một chỗ không
+
+Ví dụ bạn có 3 Node và muốn chạy 3 replica của `order-service`:
+
+```text
+Node 1 -> order-service Pod A
+Node 2 -> order-service Pod B
+Node 3 -> order-service Pod C
+```
+
+Nhưng Kubernetes không luôn luôn chia đều tuyệt đối. Nếu Node 3 thiếu tài nguyên, Pod có thể được đặt ở Node khác:
+
+```text
+Node 1 -> order-service Pod A, order-service Pod C
+Node 2 -> order-service Pod B
+Node 3 -> không nhận thêm Pod vì không phù hợp
+```
+
+Điểm quan trọng: bạn thường không chỉ định thủ công từng Pod chạy ở Node nào. Bạn khai báo desired state, còn Kubernetes chọn Node phù hợp và tiếp tục quan sát để giữ hệ thống đúng trạng thái mong muốn.
+
 ### Thực hành
 
 Tạo cluster:
@@ -157,6 +239,9 @@ kubectl get pods -n kube-system
 - Kubernetes quản lý desired state như thế nào?
 - API Server làm nhiệm vụ gì?
 - Scheduler và kubelet khác nhau ở đâu?
+- Node là gì và Node có thể là những loại máy nào?
+- Một Worker Node thường chứa những thành phần gì?
+- Pod được phân phối lên Node như thế nào?
 - Container runtime có phải là Kubernetes không?
 
 ## Ngày 2: Pod
@@ -487,6 +572,12 @@ Tạo namespace:
 kubectl create namespace ecommerce
 ```
 
+Liệt kê các namespace trong cluster:
+
+```bash
+kubectl get ns
+```
+
 Apply resource vào namespace:
 
 ```bash
@@ -564,6 +655,134 @@ http://order-service
 
 Không cần biết Pod nào đang chạy ở đâu.
 
+### Service phân phối traffic đến Pod như thế nào?
+
+Service không tự chạy ứng dụng. Service là một lớp ổn định đứng phía trước nhiều Pod.
+
+Service tìm Pod phía sau bằng **selector**. Ví dụ:
+
+```yaml
+selector:
+  app: order-service
+```
+
+Selector này nói với Kubernetes:
+
+```text
+Service order-service sẽ route traffic đến các Pod có label app=order-service
+```
+
+Nếu Deployment tạo ra 3 Pod như sau:
+
+```text
+Pod A: app=order-service, IP 10.244.1.10
+Pod B: app=order-service, IP 10.244.1.11
+Pod C: app=order-service, IP 10.244.1.12
+```
+
+thì Service sẽ xem 3 Pod này là backend phía sau nó.
+
+Flow khi một service khác gọi `http://order-service`:
+
+```text
+Payment Service gọi http://order-service
+  -> DNS trong cluster resolve order-service thành ClusterIP của Service
+  -> traffic đi tới Service
+  -> kube-proxy/networking rule chuyển traffic tới một Pod backend phù hợp
+  -> Pod A hoặc Pod B hoặc Pod C nhận request
+```
+
+Kubernetes lưu danh sách Pod phía sau Service trong **Endpoints** hoặc **EndpointSlice**.
+
+Ví dụ:
+
+```text
+Service order-service
+  -> EndpointSlice
+    -> 10.244.1.10:80
+    -> 10.244.1.11:80
+    -> 10.244.1.12:80
+```
+
+Khi Pod chết hoặc được tạo lại:
+
+```text
+Pod A chết
+Pod D được tạo mới với IP 10.244.2.20
+```
+
+Kubernetes sẽ cập nhật EndpointSlice:
+
+```text
+Trước:
+10.244.1.10:80
+10.244.1.11:80
+10.244.1.12:80
+
+Sau:
+10.244.1.11:80
+10.244.1.12:80
+10.244.2.20:80
+```
+
+Client vẫn gọi cùng một tên:
+
+```text
+http://order-service
+```
+
+Client không cần biết Pod nào vừa chết, Pod mới có IP gì, hoặc Pod đang nằm trên Node nào.
+
+Điểm quan trọng:
+
+- Service chọn Pod bằng `selector`.
+- Pod phải có `label` khớp với selector của Service.
+- Service có IP/DNS ổn định, còn danh sách Pod phía sau có thể thay đổi.
+- Kubernetes cập nhật Endpoints/EndpointSlice khi Pod thay đổi.
+- Traffic đến Service sẽ được phân phối đến một trong các Pod backend đang sẵn sàng.
+
+### Nếu có nhiều Pod thì Service chọn Pod nào?
+
+Khi phía sau Service có nhiều Pod, ví dụ:
+
+```text
+order-service
+  -> Pod A: 10.244.1.10:80
+  -> Pod B: 10.244.1.11:80
+  -> Pod C: 10.244.1.12:80
+```
+
+thì mỗi request đi vào Service sẽ được chuyển đến **một trong các Pod backend đang sẵn sàng**.
+
+Ví dụ:
+
+```text
+Request 1 -> Pod A
+Request 2 -> Pod B
+Request 3 -> Pod C
+Request 4 -> Pod A hoặc Pod B hoặc Pod C
+```
+
+Điểm cần hiểu là Kubernetes Service làm load balancing ở tầng network cơ bản. Nó không hỏi ứng dụng:
+
+```text
+Pod nào đang ít request nhất?
+Pod nào xử lý nhanh nhất?
+Pod nào đang ít CPU nhất?
+```
+
+Service thường dựa vào rule networking do `kube-proxy` hoặc dataplane tương đương tạo ra. Cách chọn Pod cụ thể có thể khác nhau tùy mode và plugin mạng, ví dụ `iptables`, IPVS hoặc eBPF-based dataplane.
+
+Với người mới học, có thể nhớ đơn giản:
+
+```text
+Service không đảm bảo luôn chia đều tuyệt đối từng request.
+Service đảm bảo client không cần biết danh sách Pod phía sau.
+Service sẽ chuyển traffic tới một backend Pod hợp lệ trong Endpoints/EndpointSlice.
+```
+
+Nếu một Pod không sẵn sàng, ví dụ readiness probe fail, Pod đó sẽ bị loại khỏi danh sách endpoint sẵn sàng. Khi đó Service sẽ không gửi traffic bình thường đến Pod đó nữa.
+
 ### Các loại Service phổ biến
 
 | Loại Service | Dùng khi nào? |
@@ -572,6 +791,36 @@ Không cần biết Pod nào đang chạy ở đâu.
 | NodePort | Mở port trên mỗi Node để truy cập từ ngoài cluster. Hay dùng cho học local, ít dùng trực tiếp trong production. |
 | LoadBalancer | Tạo load balancer bên ngoài qua cloud provider. |
 | ExternalName | Map service name trong cluster tới DNS name bên ngoài. |
+
+Hiểu đơn giản:
+
+- **ClusterIP**: chỉ dùng được bên trong cluster. Đây giống như số điện thoại nội bộ của service. Service khác trong Kubernetes có thể gọi `http://order-service`, nhưng người dùng bên ngoài cluster không gọi trực tiếp được.
+- **NodePort**: mở một port cố định trên mỗi Node, ví dụ `30080`. Từ ngoài cluster có thể gọi `http://<node-ip>:30080`. Loại này dễ hiểu và tiện cho học local, nhưng production thường không để client gọi thẳng NodePort.
+- **LoadBalancer**: dùng khi bạn muốn expose service ra ngoài một cách chuẩn hơn trên cloud. Kubernetes sẽ nhờ cloud provider tạo load balancer bên ngoài, rồi load balancer đó chuyển traffic vào Service trong cluster.
+- **ExternalName**: không route vào Pod trong cluster. Nó chỉ tạo một tên DNS nội bộ trỏ tới một DNS bên ngoài, ví dụ service trong cluster gọi `payment-gateway` nhưng thực chất được trỏ tới `api.stripe.com`.
+
+Nếu nhìn theo hướng traffic:
+
+```text
+ClusterIP:
+Service khác trong cluster -> Service -> Pod
+
+NodePort:
+Client bên ngoài -> Node IP:NodePort -> Service -> Pod
+
+LoadBalancer:
+Client bên ngoài -> Cloud Load Balancer -> Service -> Pod
+
+ExternalName:
+Service trong cluster -> tên Service nội bộ -> DNS bên ngoài
+```
+
+Một cách chọn nhanh:
+
+- Service chỉ cần các service khác trong cluster gọi: dùng `ClusterIP`.
+- Đang học local hoặc cần test nhanh từ ngoài cluster: có thể dùng `NodePort`.
+- Muốn public API/web app ra internet trên cloud: thường dùng `LoadBalancer` hoặc `Ingress`.
+- Muốn đặt alias nội bộ cho một hệ thống bên ngoài cluster: dùng `ExternalName`.
 
 Với backend service nội bộ, bạn thường bắt đầu bằng `ClusterIP`.
 
@@ -669,6 +918,9 @@ Service vẫn giữ tên `order-service`, còn danh sách Pod phía sau được
 
 - Vì sao không nên gọi Pod IP trực tiếp?
 - Service chọn Pod phía sau bằng gì?
+- Endpoints/EndpointSlice dùng để làm gì?
+- Khi request đi vào Service, traffic được chuyển đến Pod như thế nào?
+- Nếu phía sau Service có nhiều Pod, Service có đảm bảo chọn Pod ít bận nhất không?
 - `port` và `targetPort` khác nhau thế nào?
 - Khi Pod bị thay IP, vì sao client vẫn gọi được Service?
 
@@ -843,6 +1095,7 @@ kubectl port-forward service/<service-name> 8080:80
 kubectl get pods --show-labels
 kubectl get pods -l app=order-service
 kubectl create namespace ecommerce
+kubectl get ns
 kubectl get pods -n ecommerce
 kubectl config set-context --current --namespace=ecommerce
 ```
@@ -887,6 +1140,13 @@ Nếu dùng image local với kind:
 kind load docker-image ecommerce/order-service:local --name ecommerce
 ```
 
+Kiểm tra các cluster đang có:
+
+```bash
+kind get clusters
+```
+
+
 ### Pod ở trạng thái CrashLoopBackOff
 
 Nghĩa là container chạy lên rồi crash nhiều lần.
@@ -915,6 +1175,8 @@ Bạn đã hoàn thành tuần 1 nếu có thể tự trả lời:
 - Cluster khác Node như thế nào?
 - Control Plane gồm những thành phần chính nào?
 - API Server, Scheduler, kubelet làm nhiệm vụ gì?
+- Một Node chứa những gì?
+- Pod được chọn Node để chạy như thế nào?
 - Pod là gì và vì sao Pod là ephemeral?
 - Deployment, ReplicaSet, Pod liên hệ với nhau thế nào?
 - Label và selector liên kết resource ra sao?
@@ -942,6 +1204,9 @@ Xóa một Pod và quan sát Kubernetes tự tạo lại Pod mới
 - Kubernetes quản lý desired state bằng cách lưu trạng thái mong muốn qua API Server vào `etcd`, rồi các controller liên tục so sánh trạng thái thực tế với trạng thái mong muốn. Nếu có lệch, controller tạo/cập nhật/xóa resource để kéo cluster về đúng trạng thái.
 - API Server là cổng giao tiếp trung tâm của cluster. `kubectl`, controller, scheduler và nhiều component khác đều nói chuyện với API Server.
 - Scheduler chọn Node phù hợp cho Pod mới. Kubelet chạy trên từng Node và đảm bảo container của Pod được chạy đúng trên Node đó.
+- Node là máy chủ trong cluster, nơi Pod thực sự chạy. Node có thể là máy vật lý, máy ảo, hoặc cloud instance như EC2/VM trên GCP/Azure.
+- Một Worker Node thường chứa `kubelet`, `kube-proxy`, container runtime như `containerd` hoặc CRI-O, và các Pod workload đang chạy trên Node đó.
+- Pod được phân phối lên Node bởi Scheduler. Scheduler tìm Pod chưa có Node, xem Node nào còn đủ tài nguyên và phù hợp với ràng buộc cấu hình, rồi gán Pod vào Node đó. Sau đó kubelet trên Node nhận nhiệm vụ chạy Pod.
 - Container runtime không phải Kubernetes. Nó là thành phần chạy container thật sự, ví dụ `containerd` hoặc CRI-O.
 
 ### Ngày 2
@@ -969,5 +1234,8 @@ Xóa một Pod và quan sát Kubernetes tự tạo lại Pod mới
 
 - Không nên gọi Pod IP trực tiếp vì Pod IP thay đổi khi Pod bị tạo lại. Service cung cấp tên DNS và virtual IP ổn định.
 - Service chọn Pod phía sau bằng selector match với label của Pod.
+- Endpoints/EndpointSlice lưu danh sách backend Pod hiện tại của Service, thường là các cặp IP và port của Pod đang sẵn sàng nhận traffic.
+- Khi request đi vào Service, kube-proxy hoặc cơ chế networking tương đương dùng rule của Service để chuyển traffic đến một Pod backend phù hợp trong danh sách Endpoints/EndpointSlice.
+- Không. Service không tự chọn Pod ít bận nhất hay ít CPU nhất. Nó phân phối traffic ở tầng network đến một backend Pod hợp lệ; cách chọn cụ thể phụ thuộc vào kube-proxy/dataplane. Với người mới, chỉ cần nhớ Service giúp client không cần biết Pod nào đang ở phía sau.
 - `port` là port mà Service expose. `targetPort` là port trên container/Pod mà Service forward traffic tới.
 - Khi Pod bị thay IP, Kubernetes cập nhật endpoints/EndpointSlice của Service, nên client vẫn gọi DNS Service như cũ.
